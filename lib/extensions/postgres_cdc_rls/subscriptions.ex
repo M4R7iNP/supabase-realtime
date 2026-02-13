@@ -11,8 +11,6 @@ defmodule Extensions.PostgresCdcRls.Subscriptions do
   @type subscription_params :: {binary, binary, [filter]}
   @type subscription_list :: [%{id: binary, claims: map, subscription_params: subscription_params}]
 
-  @filter_types ["eq", "neq", "lt", "lte", "gt", "gte", "in"]
-
   @spec create(conn(), String.t(), subscription_list, pid(), pid()) ::
           {:ok, Postgrex.Result.t()}
           | {:error, Exception.t() | {:exit, term} | {:subscription_insert_failed, String.t()}}
@@ -214,19 +212,12 @@ defmodule Extensions.PostgresCdcRls.Subscriptions do
         try do
           {:ok,
            {schema, table,
-            Enum.map(String.split(filter, ","), fn part ->
-              with [col, rest] <- String.split(part, "=", parts: 2),
-                   [filter_type, value] when filter_type in @filter_types <-
-                     String.split(rest, ".", parts: 2),
-                   {:ok, formatted_value} <- format_filter_value(filter_type, value) do
-                {col, filter_type, formatted_value}
-              else
-                {:error, msg} -> throw("Error parsing `filter` params: #{msg}")
-                e -> throw("Error parsing `filter` params: #{inspect(e)}")
-              end
-            end)}}
+            case RealtimeFilterParser.parse_filter(filter) do
+              {:ok, filters} -> filters
+              {:error, error} -> throw(error)
+            end}}
         catch
-          msg -> {:error, msg}
+          error -> {:error, error}
         end
 
       %{"schema" => schema, "table" => table} ->
@@ -245,22 +236,6 @@ defmodule Extensions.PostgresCdcRls.Subscriptions do
       error ->
         {:error,
          "No subscription params provided. Please provide at least a `schema` or `table` to subscribe to: #{inspect(error)}"}
-    end
-  end
-
-  defp format_filter_value(filter, value) do
-    case filter do
-      "in" ->
-        case Regex.run(~r/^\((.*)\)$/, value) do
-          nil ->
-            {:error, "`in` filter value must be wrapped by parentheses"}
-
-          [_, new_value] ->
-            {:ok, "{#{new_value}}"}
-        end
-
-      _ ->
-        {:ok, value}
     end
   end
 end
